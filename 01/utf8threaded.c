@@ -11,9 +11,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <sys/types.h>
-#include <threads.h>
 
-#define BUFFER_SIZE 128
+#define BUFFER_SIZE 128 // em vez de cada thread processor um numero fixo de bytes, fazer com q cada thread processe um numero fixo de palavras
 #define False 0
 #define True !False
 #define DELIMITER_COUNT 20
@@ -141,7 +140,7 @@ int nextUTF(union UTF8 *utf, FILE *fd) {
   uint8_t n = 1;
   uint8_t *c = &utf->bytes[3];
 
-  if ((*c & 0b11000000) == 0b11000000 && (*c & 0b00100000) == 0) {
+  if ((*c & 0b11000000) == 0b11000000 && (*c & 0b00100000) == 0) { 
     n = 2;
   } else if ((*c & 0b11100000) == 0b11100000 && (*c & 0b00010000) == 0) {
     n = 3;
@@ -160,11 +159,19 @@ int nextUTF(union UTF8 *utf, FILE *fd) {
 int isWordUTF(union UTF8 *utf) {
   uint8_t c = utf->bytes[3];
   return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
-         (c >= '0' && c <= '9');
+         (c >= '0' && c <= '9' && utf->code != 0x30) || c == '_';
 }
+
 int isMergerUTF(union UTF8 *utf) {
   return utf->bytes[3] == 0x27 || utf->code == 0xE2809800 ||
          utf->code == 0xE2809900;
+}
+
+int isSeparatorUTF(union UTF8 *utf) {
+  return utf->bytes[3] == '-' || utf->bytes[3] == 0xE280A6 
+      ||utf->bytes[3] == 0xE28093 || utf->bytes[3] == 0xE2809C || utf->bytes[3] == 0xE2809D
+       || utf->bytes[3] =='.' ||  utf->bytes[3] ==',' || utf->bytes[3] =='?' ||  utf->bytes[3] =='!'
+       || utf->bytes[3] =='[' || utf->bytes[3] ==']'|| utf->bytes[3] ==';'|| utf->bytes[3] ==':';
 }
 
 void *worker(void *ptr) {
@@ -178,8 +185,7 @@ void *worker(void *ptr) {
   fseek(fd, 0, SEEK_END);
   long file_size = ftell(fd);
 
-  for (int i = BUFFER_SIZE * args->id; i <= file_size;
-       i += BUFFER_SIZE * args->shm->worker_c) {
+  for (int i = BUFFER_SIZE * args->id; i <= file_size; i += BUFFER_SIZE * args->shm->worker_c) {
     printf("Worker %d starting at %d\n", args->id, i);
     err = fseek(fd, i, SEEK_SET);
     if (err != 0) {
@@ -191,12 +197,11 @@ void *worker(void *ptr) {
     union UTF8 utf;
 
     //  1. go to first non word char
-    while (j < BUFFER_SIZE + 1) {
+    while (j < BUFFER_SIZE+1) {
       j += nextUTF(&utf, fd);
       removeAssentuation(&utf);
-      uint8_t c = utf.bytes[3];
-      if (!isWordUTF(&utf) && !isMergerUTF(&utf)) {
-        break; // found starting point
+      if (!isWordUTF(&utf) && !isMergerUTF(&utf) && !isSeparatorUTF(&utf)) {
+        break;
       }
     }
 
@@ -215,26 +220,24 @@ void *worker(void *ptr) {
         c -= 'A' + 'a';
       }
 
-      if (isWordUTF(&utf) || c == '_') {
+      if (isWordUTF(&utf)) {
         inWord = True;
-        if (!hasFoundConsonants && c > 'a' && c <= 'z' && c != 'e' &&
-            c != 'i' && c != 'o' && c != 'u') {
+        if (!hasFoundConsonants && c > 'a' && c <= 'z' && c != 'e' && c != 'i' && c != 'o' && c != 'u') {   
           dict[c - 'a'] += 1;
-          if (dict[c - 'a'] == 2) {
+          if (dict[c - 'a'] > 1) {
             twoConsonants++;
             hasFoundConsonants = True;
           }
         }
-      } else if (utf.bytes[3] != 0x27 && utf.code != 0xE2809800 &&
-                 utf.code != 0xE2809900) {
-        if (inWord) {
-          words++;
-        }
-        inWord = False;
-        hasFoundConsonants = False;
-        for (int k = 0; k < 26; k++) {
-          dict[k] = 0;
-        }
+      } else if (!isMergerUTF(&utf)) {
+          if (inWord) {
+            words++;
+          }
+          inWord = False;
+          for (int k = 0; k < 26; k++) {
+            dict[k] = 0;
+          }
+          hasFoundConsonants = False;
       }
     }
   }
@@ -283,10 +286,12 @@ int main(int argc, char *argv[]) {
 
   printf("All workers exited!\n");
 
-  printf("Words: %d\n", shm.global_words);
-  printf("Consonants: %d\n", shm.global_consonants);
+  printf("Total Number of words: %d\n", shm.global_words);
+  printf("Total number of words with at least two instances of the same "
+         "consonant: %d\n",shm.global_consonants );
 
   free(threads);
 
   return 0;
 }
+
