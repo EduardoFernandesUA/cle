@@ -4,6 +4,12 @@
  * solution trial 1: read the first 128 bytes + the necessary till next
  * delimiters and always align the start to the "buffer size (e.g. 128)"
  * when starting the read go to the next delimiter
+ *
+ * 1 12
+ * 2 12
+ * 3 13
+ * 4 11
+ * _ 48
  * */
 
 #include <pthread.h>
@@ -17,6 +23,7 @@
 #define False 0
 #define True !False
 #define DELIMITER_COUNT 20
+#define DEBUG True
 
 union UTF8 {
   uint8_t bytes[4];
@@ -180,7 +187,8 @@ void *worker(void *ptr) {
 
   for (int i = BUFFER_SIZE * args->id; i <= file_size;
        i += BUFFER_SIZE * args->shm->worker_c) {
-    printf("Worker %d starting at %d\n", args->id, i);
+    printf("\n\nWorker %d starting at %d\n", args->id, i);
+    printf("\033[1;31m");
     err = fseek(fd, i, SEEK_SET);
     if (err != 0) {
       printf("End of file\n");
@@ -193,19 +201,26 @@ void *worker(void *ptr) {
     //  1. go to first non word char
     while (j < BUFFER_SIZE + 1) {
       j += nextUTF(&utf, fd);
+      printfUTF8(&utf);
       removeAssentuation(&utf);
       uint8_t c = utf.bytes[3];
       if (!isWordUTF(&utf) && !isMergerUTF(&utf)) {
         break; // found starting point
       }
     }
+    printf("\033[0m\033[1;32m");
 
     //  2. count all the characters till the first not character after
     //    i+buffer_size
     int hasFoundConsonants = False;
     int inWord = False;
+    int thisWords = 0;
+    int thisConsonants = 0;
     while (j < BUFFER_SIZE + 1 || (isWordUTF(&utf) || isMergerUTF(&utf))) {
+      if (j == BUFFER_SIZE)
+        printf("\033[1;31m");
       j += nextUTF(&utf, fd);
+      printfUTF8(&utf);
       removeAssentuation(&utf);
 
       uint8_t c = utf.bytes[3];
@@ -222,6 +237,7 @@ void *worker(void *ptr) {
           dict[c - 'a'] += 1;
           if (dict[c - 'a'] == 2) {
             twoConsonants++;
+            thisConsonants++;
             hasFoundConsonants = True;
           }
         }
@@ -229,6 +245,7 @@ void *worker(void *ptr) {
                  utf.code != 0xE2809900) {
         if (inWord) {
           words++;
+          thisWords++;
         }
         inWord = False;
         hasFoundConsonants = False;
@@ -237,6 +254,8 @@ void *worker(void *ptr) {
         }
       }
     }
+    printf("\033[0m");
+    printf("\n%d %d\n", thisWords, thisConsonants);
   }
 
   pthread_mutex_lock(&args->shm->global_mutex);
