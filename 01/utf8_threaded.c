@@ -1,14 +1,28 @@
+#include <pthread.h>
 #include <stdint.h>
 #include <stdio.h>
+#include <stdlib.h>
 
-#define BUFFER_SIZE 64
+#define BUFFER_SIZE 1024 * 4
 #define False 0
 #define True !False
-#define DELIMITER_COUNT 20
 
 union UTF8 {
   uint8_t bytes[4];
   uint32_t code;
+};
+
+struct worker_shm {
+  char *file_str;
+  int *words;
+  int *consonants;
+  int thread_c;
+  pthread_mutex_t mutex;
+};
+
+struct worker_st {
+  int id;
+  struct worker_shm *shm;
 };
 
 void printUTF8(union UTF8 *utf8) {
@@ -27,7 +41,7 @@ int nextUTF8(FILE *fd, union UTF8 *utf) {
   fread(&utf->bytes[3], 1, 1, fd);
   uint8_t c = utf->bytes[3];
   if (c == 0)
-    return 0;
+    return -1;
 
   uint8_t n = 1;
 
@@ -137,7 +151,7 @@ int nextWord(FILE *fd, int *words, int *consonants) {
       return -1;
     }
     removeAccentuation(&utf);
-    printUTF8(&utf);
+    // printUTF8(&utf);
 
     uint8_t c = utf.bytes[3];
     if (c >= 'a' && c <= 'z' && c != 'a' && c != 'e' && c != 'i' && c != 'o' && c != 'u') {
@@ -154,22 +168,65 @@ int nextWord(FILE *fd, int *words, int *consonants) {
   return 0;
 }
 
+void *worker(void *args) {
+  struct worker_st *st = (struct worker_st *)args;
+
+  FILE *fd = fopen(st->shm->file_str, "rb");
+  fseek(fd, 0, SEEK_END);
+  long file_size = ftell(fd);
+  printf("FILE_SIZE: %ld\n", file_size);
+
+  int err, local_words = 0, local_consonants = 0;
+  int fdt = 0, old_consonants;
+  for (long i = st->id * BUFFER_SIZE; i < file_size; i += st->shm->thread_c * BUFFER_SIZE) {
+    fseek(fd, i, SEEK_SET);
+    fdt = ftell(fd);
+    while (fdt < i + BUFFER_SIZE && fdt < file_size) {
+      old_consonants = local_consonants;
+      err = nextWord(fd, &local_words, &local_consonants);
+      if (err == -1)
+        break;
+      fdt = ftell(fd);
+    }
+    if (fdt > i + BUFFER_SIZE + 1) {
+      printf("BAH \n");
+      local_consonants = old_consonants;
+      local_words--;
+    }
+    printf("%ld\n", i);
+  }
+
+  printf("Worker %d: %d %d\n", st->id, local_words, local_consonants);
+
+  return NULL;
+}
+
 int main(int argc, char *argv[]) {
   int words = 0, consonants = 0;
   int err;
 
-  FILE *fd;
+  // Threads variables
+  int thread_c = atoi(argv[1]);
+  pthread_t threads[thread_c];
+  struct worker_st worker_args[thread_c];
+  struct worker_shm workers_shm = {NULL, &words, &consonants, thread_c};
+  pthread_mutex_init(&workers_shm.mutex, NULL);
 
-  for (int i = 1; i < argc; i++) {
+  for (int i = 2; i < argc; i++) {
     printf("FILE: %s\n", argv[i]);
 
-    fd = fopen(argv[i], "rb");
+    workers_shm.file_str = argv[i];
 
-    while (True) {
+    // start threads
+    for (int j = 0; j < thread_c; j++) {
+      worker_args[j].id = j;
+      worker_args[j].shm = &workers_shm;
+      pthread_create(&threads[j], NULL, worker, &worker_args[j]);
+    }
 
-      err = nextWord(fd, &words, &consonants);
-      if (err == -1)
-        break;
+    // wait for ending of threads
+    for (int j = 0; j < thread_c; j++) {
+      pthread_join(threads[j], NULL);
     }
   }
 

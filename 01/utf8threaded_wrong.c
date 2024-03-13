@@ -17,9 +17,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <sys/types.h>
-#include <threads.h>
 
-#define BUFFER_SIZE 128
+#define BUFFER_SIZE 128 * 128 * 128
 #define False 0
 #define True !False
 #define DELIMITER_COUNT 20
@@ -140,6 +139,10 @@ void removeAssentuation(union UTF8 *utf) {
   default:
     break;
   }
+  uint8_t c = utf->bytes[3];
+  if (c >= 'A' && c <= 'Z') {
+    c -= 'A' + 'a';
+  }
 }
 
 int nextUTF(union UTF8 *utf, FILE *fd) {
@@ -166,17 +169,58 @@ int nextUTF(union UTF8 *utf, FILE *fd) {
 // returns a bool (zero or !zero)
 int isWordUTF(union UTF8 *utf) {
   uint8_t c = utf->bytes[3];
-  return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
-         (c >= '0' && c <= '9');
+  return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9' && c == '_');
 }
 int isMergerUTF(union UTF8 *utf) {
-  return utf->bytes[3] == 0x27 || utf->code == 0xE2809800 ||
-         utf->code == 0xE2809900;
+  return utf->bytes[3] == '-' || utf->bytes[3] == 0x27 || utf->code == 0xE2809800 || utf->code == 0xE2809900;
+}
+
+void gotoNextWord(FILE *fd, long file_size) {
+  union UTF8 utf;
+
+  // skip all the non word utf
+  int n;
+  do {
+    n = nextUTF(&utf, fd);
+    removeAssentuation(&utf);
+  } while (!isWordUTF(&utf) && ftell(fd) < file_size);
+
+  fseek(fd, ftell(fd) - n, SEEK_SET);
+}
+
+int evaluateWord(FILE *fd) {
+  int consonant = 0;
+  int letters[26] = {0};
+
+  union UTF8 utf;
+
+  while (1) {
+    int n = nextUTF(&utf, fd);
+    removeAssentuation(&utf);
+    printfUTF8(&utf);
+    if (isWordUTF(&utf) || isMergerUTF(&utf)) {
+      if (consonant) {
+        continue;
+      }
+      uint8_t c = utf.bytes[3];
+      if (c >= 'a' && c <= 'z') {
+        letters[c - 'a'] += 1;
+        if (letters[c - 'a'] > 1 && c != 'a' && c != 'e' && c != 'i' &&
+            c != 'o' && c != 'u') {
+          consonant = 1;
+        }
+      }
+    } else {
+      break;
+    }
+  }
+
+  return consonant;
 }
 
 void *worker(void *ptr) {
   int err;
-  int words = 0, twoConsonants = 0;
+  int words = 0, consonants = 0;
   int dict[26] = {0};
   struct worker_st *args = (struct worker_st *)ptr;
   printf("Worker %d started\n", args->id);
@@ -185,8 +229,7 @@ void *worker(void *ptr) {
   fseek(fd, 0, SEEK_END);
   long file_size = ftell(fd);
 
-  for (int i = BUFFER_SIZE * args->id; i <= file_size;
-       i += BUFFER_SIZE * args->shm->worker_c) {
+  for (int i = BUFFER_SIZE * args->id; i <= file_size; i += BUFFER_SIZE * args->shm->worker_c) {
     printf("\n\nWorker %d starting at %d\n", args->id, i);
     printf("\033[1;31m");
     err = fseek(fd, i, SEEK_SET);
@@ -196,71 +239,28 @@ void *worker(void *ptr) {
     }
 
     int j = 0;
-    union UTF8 utf;
 
     //  1. go to first non word char
-    while (j < BUFFER_SIZE + 1) {
-      j += nextUTF(&utf, fd);
-      printfUTF8(&utf);
-      removeAssentuation(&utf);
-      uint8_t c = utf.bytes[3];
-      if (!isWordUTF(&utf) && !isMergerUTF(&utf)) {
-        break; // found starting point
-      }
-    }
+    gotoNextWord(fd, file_size);
     printf("\033[0m\033[1;32m");
 
     //  2. count all the characters till the first not character after
     //    i+buffer_size
-    int hasFoundConsonants = False;
-    int inWord = False;
-    int thisWords = 0;
-    int thisConsonants = 0;
-    while (j < BUFFER_SIZE + 1 || (isWordUTF(&utf) || isMergerUTF(&utf))) {
-      if (j == BUFFER_SIZE)
+    while (ftell(fd) < BUFFER_SIZE + 1 && ftell(fd) < file_size - 1) {
+      if (j == BUFFER_SIZE) {
         printf("\033[1;31m");
-      j += nextUTF(&utf, fd);
-      printfUTF8(&utf);
-      removeAssentuation(&utf);
-
-      uint8_t c = utf.bytes[3];
-
-      // toLowerKey
-      if (c >= 'A' && c <= 'Z') {
-        c -= 'A' + 'a';
       }
-
-      if (isWordUTF(&utf) || c == '_') {
-        inWord = True;
-        if (!hasFoundConsonants && c > 'a' && c <= 'z' && c != 'e' &&
-            c != 'i' && c != 'o' && c != 'u') {
-          dict[c - 'a'] += 1;
-          if (dict[c - 'a'] == 2) {
-            twoConsonants++;
-            thisConsonants++;
-            hasFoundConsonants = True;
-          }
-        }
-      } else if (utf.bytes[3] != 0x27 && utf.code != 0xE2809800 &&
-                 utf.code != 0xE2809900) {
-        if (inWord) {
-          words++;
-          thisWords++;
-        }
-        inWord = False;
-        hasFoundConsonants = False;
-        for (int k = 0; k < 26; k++) {
-          dict[k] = 0;
-        }
-      }
+      consonants += evaluateWord(fd);
+      gotoNextWord(fd, file_size);
+      words++;
+      printf("\nBAH: %d %d\n\n", words, consonants);
     }
     printf("\033[0m");
-    printf("\n%d %d\n", thisWords, thisConsonants);
   }
 
   pthread_mutex_lock(&args->shm->global_mutex);
   args->shm->global_words += words;
-  args->shm->global_consonants += twoConsonants;
+  args->shm->global_consonants += consonants;
   pthread_mutex_unlock(&args->shm->global_mutex);
 
   return 0;
@@ -279,8 +279,7 @@ int main(int argc, char *argv[]) {
   printf("Opening %s in %d threads\n", argv[2], thread_c);
 
   pthread_t *threads = (pthread_t *)malloc(thread_c * sizeof(pthread_t));
-  struct worker_st *workers_args =
-      (struct worker_st *)malloc(thread_c * sizeof(struct worker_st));
+  struct worker_st *workers_args = (struct worker_st *)malloc(thread_c * sizeof(struct worker_st));
 
   struct worker_shm_st shm;
   shm.worker_c = thread_c;
