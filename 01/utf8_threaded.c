@@ -3,7 +3,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 
-#define BUFFER_SIZE 1024 * 4
+#define BUFFER_SIZE 1024
 #define False 0
 #define True !False
 
@@ -163,8 +163,8 @@ int nextWord(FILE *fd, int *words, int *consonants) {
     foundWordLetter = isWordLetter(&utf) || foundWordLetter;
 
   } while (isWordLetter(&utf) || isMergerLetter(&utf));
-  (*words) += i > 1 && foundWordLetter;
-  (*consonants) += foundDoubleConsonant;
+  (*words) = i > 1 && foundWordLetter;
+  (*consonants) = foundDoubleConsonant;
   return 0;
 }
 
@@ -177,21 +177,26 @@ void *worker(void *args) {
   printf("FILE_SIZE: %ld\n", file_size);
 
   int err, local_words = 0, local_consonants = 0;
+  int found_words = 0, found_consonants = 0;
   int fdt = 0, old_consonants;
   for (long i = st->id * BUFFER_SIZE; i < file_size; i += st->shm->thread_c * BUFFER_SIZE) {
     fseek(fd, i, SEEK_SET);
     fdt = ftell(fd);
     while (fdt < i + BUFFER_SIZE && fdt < file_size) {
-      old_consonants = local_consonants;
-      err = nextWord(fd, &local_words, &local_consonants);
+      err = nextWord(fd, &found_words, &found_consonants);
+      local_words += found_words;
+      local_consonants += found_consonants;
       if (err == -1)
         break;
       fdt = ftell(fd);
     }
     if (fdt > i + BUFFER_SIZE + 1) {
-      printf("BAH \n");
-      local_consonants = old_consonants;
       local_words--;
+      if (found_consonants == 1) {
+        fseek(fd, i + BUFFER_SIZE, SEEK_SET);
+        local_consonants -= nextWord(fd, &found_words, &found_consonants);
+        local_consonants -= found_consonants;
+      }
     }
     printf("%ld\n", i);
   }
