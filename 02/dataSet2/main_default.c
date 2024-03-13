@@ -2,6 +2,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <time.h>
+#include <sys/types.h>
 
 int main(int argc, char *argv[]) {
 
@@ -96,12 +97,12 @@ int main(int argc, char *argv[]) {
 
   t = clock() - t;
   double time_taken = ((double)t) / CLOCKS_PER_SEC;
-  printf("Merge Sort: %.2fs\n", time_taken);
+  printf("Merge Sort: %.6fs\n", time_taken);
 
   // printf("\nSorted\n");
-  // for (i = 0; i < arrayLen; i++) {
-  //   printf("%u\n", numbers[i]);
-  // }
+  for (i = 0; i < arrayLen; i++) {
+    printf("%d ", numbers[i]);
+  }
 
   free(numbers);
   free(ntemp);
