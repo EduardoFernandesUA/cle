@@ -54,10 +54,15 @@ void bitonic_sort(int* arr, int low, int cnt, int dir) {
 void* worker_function(void* args) {
     WorkerParams* params = (WorkerParams*)args;
 
+    printf("Thread %d: Sorting %d elements\n", params->id, params->num_elements);
+
     bitonic_sort(params->array, 0, params->num_elements, 1); // Decreasing order
+
+    printf("Thread %d: Sorting completed\n", params->id);
 
     return NULL;
 }
+
 
 // Distributor thread function
 void* distributor_thread(void* args) {
@@ -86,25 +91,28 @@ void* distributor_thread(void* args) {
         return NULL;
     }
 
+    pthread_t threads[params->num_threads]; // Create an array to hold thread IDs
+
+    WorkerParams* worker_params = malloc(params->num_threads * sizeof(WorkerParams));
+    if (worker_params == NULL) {
+        printf("Error: Memory allocation failed for worker_params\n");
+        fclose(file);
+        free(params->sorted_sequence);
+        return NULL;
+    }
+
     for (int i = 0; i < params->num_threads; i++) {
-        WorkerParams* worker_params = (WorkerParams*)malloc(sizeof(WorkerParams)); 
-        if (worker_params == NULL) {
-            printf("Error: Memory allocation failed for worker %d\n", i);
-            fclose(file);
-            free(params->sorted_sequence);
-            return NULL;
-        }
-        worker_params->id = i;
-        worker_params->array = NULL;
-        snprintf(worker_params->filename, MAX_FILENAME_LENGTH, "%s", params->filename);
+        worker_params[i].id = i;
+        worker_params[i].array = NULL;
+        snprintf(worker_params[i].filename, MAX_FILENAME_LENGTH, "%s", params->filename);
         
         int thread_integers = integers_per_thread + (i < remaining_integers ? 1 : 0);
         
         fseek(file, sizeof(int) + start_position * sizeof(int), SEEK_SET);
         
         // Read integers 
-        worker_params->array = (int*)malloc(thread_integers * sizeof(int));
-        if (worker_params->array == NULL) {
+        worker_params[i].array = (int*)malloc(thread_integers * sizeof(int));
+        if (worker_params[i].array == NULL) {
             printf("Error: Memory allocation failed for worker %d\n", i);
             fclose(file);
             free(worker_params);
@@ -112,39 +120,41 @@ void* distributor_thread(void* args) {
             return NULL;
         }
         
-        size_t integers = fread(worker_params->array, sizeof(int), thread_integers, file);
+        size_t integers = fread(worker_params[i].array, sizeof(int), thread_integers, file);
         if (integers != thread_integers) {
             printf("Error: Failed to read integers for worker %d from file %s\n", i, params->filename);
-            free(worker_params->array);
+            free(worker_params[i].array);
             fclose(file);
             free(worker_params);
             free(params->sorted_sequence);
             return NULL;
         }
 
-        worker_params->num_elements = thread_integers; 
+        worker_params[i].num_elements = thread_integers; 
 
         start_position += thread_integers;
 
-        // bitonic sort in each worker thread
-        pthread_t worker_thread;
-        pthread_create(&worker_thread, NULL, worker_function, (void*)worker_params);
-        pthread_join(worker_thread, NULL); 
+        // creation of multiple worker threads
+        pthread_create(&threads[i], NULL, worker_function, (void*)&worker_params[i]);
+    }
 
-        pthread_mutex_lock(&print_mutex);
-        for (int j = 0; j < thread_integers; j++) {
-            params->sorted_sequence[params->sequence_length++] = worker_params->array[j];
+    // Wait for all worker threads to finish
+    for (int i = 0; i < params->num_threads; i++) {
+        pthread_join(threads[i], NULL); 
+    }
+
+    for (int i = 0; i < params->num_threads; i++) {
+        for (int j = 0; j < worker_params[i].num_elements; j++) {
+            params->sorted_sequence[params->sequence_length++] = worker_params[i].array[j];
         }
-        pthread_mutex_unlock(&print_mutex);
-
-        free(worker_params->array);
-        free(worker_params);
     }
 
     fclose(file);
 
     // Perform final bitonic merge on the sorted sequence from the given sequences of each worker
     bitonic_sort(params->sorted_sequence, 0, params->sequence_length, 1);
+
+    free(worker_params);
 
     return NULL;
 }
@@ -182,8 +192,6 @@ int main(int argc, char *argv[]) {
     char filename[MAX_FILENAME_LENGTH];
     snprintf(filename, MAX_FILENAME_LENGTH, "%s", argv[2]);
 
-    pthread_t threads[num_threads];
-
     // Creation of distributor thread
     DistributorParams distributor_params;
     snprintf(distributor_params.filename, MAX_FILENAME_LENGTH, "%s", filename);
@@ -193,16 +201,19 @@ int main(int argc, char *argv[]) {
 
     double start_time = get_delta_time(); // start time
 
-    pthread_create(&threads[0], NULL, distributor_thread, (void*)&distributor_params);
+    pthread_t distributor_thread_id;
+    pthread_create(&distributor_thread_id, NULL, distributor_thread, (void*)&distributor_params);
 
-    pthread_join(threads[0], NULL);
+    pthread_join(distributor_thread_id, NULL);
 
     double end_time = get_delta_time(); // end time
 
-    printf("Sorted sequence: \n");
-    for (int i = 0; i < distributor_params.sequence_length; i++) {
-        printf("%d ", distributor_params.sorted_sequence[i]);
-    }
+    //printf("Sorted sequence: \n");
+    // for (int i = 0; i < distributor_params.sequence_length; i++) {
+    //     printf("%d ", distributor_params.sorted_sequence[i]);
+    // }
+    
+    
     printf("\n");
 
     printf("Elapsed time: %.9f seconds\n", end_time - start_time);
