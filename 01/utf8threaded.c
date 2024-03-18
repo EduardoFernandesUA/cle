@@ -203,6 +203,14 @@ void *worker(void *args) {
 
   printf("Worker %d: %d %d\n", st->id, local_words, local_consonants);
 
+  // Update shared counts
+  pthread_mutex_lock(&st->shm->mutex);
+  *st->shm->words += local_words;
+  *st->shm->consonants += local_consonants;
+  pthread_mutex_unlock(&st->shm->mutex);
+
+  fclose(fd);
+
   return NULL;
 }
 
