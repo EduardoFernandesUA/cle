@@ -64,16 +64,16 @@ int readCmdArgs(int argc, char **argv, FILE **fd, int *thr_count) {
 
   // Extract filename and integer from command line arguments
   *thr_count = atoi(argv[2]);
-
+  printf("Invalid integer input\n");
   // Error handling for invalid integer input
   if (*thr_count == 0 && argv[2][0] != '0') {
-    printf("Invalid integer input\n");
     return 2; // Return error code 2 indicating invalid integer
   }
 
   // Error handling for invalid file
   *fd = fopen(argv[1], "r");
   if (*fd == NULL) {
+
     printf("Error opening file %s\n", argv[1]);
     return 3; // Return error code 3 indicating file opening failure
   }
