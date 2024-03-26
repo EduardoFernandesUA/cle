@@ -3,7 +3,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 
-#define BUFFER_SIZE 1024
+#define BUFFER_SIZE 1024 * 4
 #define False 0
 #define True !False
 
@@ -24,6 +24,20 @@ struct worker_st {
   int id;
   struct worker_shm *shm;
 };
+
+// GLOBAL VARIABLES
+char **files;
+int files_c;
+
+static double get_delta_time(void) {
+  static struct timespec t0, t1;
+  t0 = t1;
+  if (clock_gettime(CLOCK_MONOTONIC, &t1) != 0) {
+    perror("clock_gettime");
+    exit(1);
+  }
+  return (double)(t1.tv_sec - t0.tv_sec) + 1.0e-9 * (double)(t1.tv_nsec - t0.tv_nsec);
+}
 
 void printUTF8(union UTF8 *utf8) {
   for (int i = 3; i >= 0 && utf8->bytes[i] != 0; i--)
@@ -144,9 +158,10 @@ int nextWord(FILE *fd, int *words, int *consonants) {
   int foundWordLetter = 0;
   int foundDoubleConsonant = 0;
   int i = 0;
+  int n;
 
   do {
-    int n = nextUTF8(fd, &utf);
+    n = nextUTF8(fd, &utf);
     if (n == 0) { // EOF
       return -1;
     }
@@ -165,80 +180,146 @@ int nextWord(FILE *fd, int *words, int *consonants) {
   } while (isWordLetter(&utf) || isMergerLetter(&utf));
   (*words) = i > 1 && foundWordLetter;
   (*consonants) = foundDoubleConsonant;
+  return n; // number of bytes read
+}
+
+/*
+ * gives the file descriptor for the next available block
+ * is protected by a mutex that provides mutual exclusion
+ * uses static variables to keep track of current file and position
+ * returns !0 if no next block available (the thread should when, no more work to do)
+ * */
+static int distributor(FILE **fd) {
+  static pthread_mutex_t mut = PTHREAD_MUTEX_INITIALIZER;
+  static int file_i = 0;   // between 0 and file count
+  static int file_pos = 0; // multiple of BLOCK_SIZE
+  static long file_s = 0;  // keeps the file size for easier access
+
+  pthread_mutex_lock(&mut);
+
+  if (file_i >= files_c) {
+    pthread_mutex_unlock(&mut);
+    return 1; // all files read
+  }
+
+  // open file descriptor for current thread
+  *fd = fopen(files[file_i], "rb");
+  fseek(*fd, 0, SEEK_END);
+  file_s = ftell(*fd);
+  fseek(*fd, file_pos, SEEK_SET);
+
+  // printf("distributor %d\n", file_pos);
+
+  // prepare the variables for the next thread
+  if (file_pos + BUFFER_SIZE > file_s) { // reached end of file
+    if (file_i + 1 > files_c) {
+      pthread_mutex_unlock(&mut);
+      return 1; // all files read
+    }
+    file_i++;
+    file_pos = 0;
+  } else {
+    file_pos += BUFFER_SIZE;
+  }
+
+  pthread_mutex_unlock(&mut);
   return 0;
 }
 
 void *worker(void *args) {
   struct worker_st *st = (struct worker_st *)args;
 
-  FILE *fd = fopen(st->shm->file_str, "rb");
-  fseek(fd, 0, SEEK_END);
-  long file_size = ftell(fd);
-  printf("FILE_SIZE: %ld\n", file_size);
-
-  int err, local_words = 0, local_consonants = 0;
+  FILE *fd;
+  int err, n, local_words = 0, local_consonants = 0;
   int found_words = 0, found_consonants = 0;
-  int fdt = 0, old_consonants;
-  for (long i = st->id * BUFFER_SIZE; i < file_size; i += st->shm->thread_c * BUFFER_SIZE) {
-    fseek(fd, i, SEEK_SET);
+  int fdt = 0, fdt_start, old_consonants;
+
+  while (True) { // each loop handles a sub sequence
+    err = distributor(&fd);
+    fdt_start = ftell(fd);
     fdt = ftell(fd);
-    while (fdt < i + BUFFER_SIZE && fdt < file_size) {
-      err = nextWord(fd, &found_words, &found_consonants);
+    if (err) { // end of work, all done
+      break;
+    }
+
+    // count all the sub sequence words and consonants
+    while (fdt < fdt_start + BUFFER_SIZE) {
+      n = nextWord(fd, &found_words, &found_consonants);
       local_words += found_words;
       local_consonants += found_consonants;
-      if (err == -1)
-        break;
       fdt = ftell(fd);
+      if (n == -1) // EOF
+        break;
     }
-    if (fdt > i + BUFFER_SIZE + 1) {
+
+    // handle duplication of intersecting word (word that is in 2 different sub-sequences)
+    if (fdt > fdt_start + BUFFER_SIZE + 1) {
       local_words--;
       if (found_consonants == 1) {
-        fseek(fd, i + BUFFER_SIZE, SEEK_SET);
-        local_consonants -= nextWord(fd, &found_words, &found_consonants);
+        fseek(fd, fdt_start + BUFFER_SIZE, SEEK_SET);
+        nextWord(fd, &found_words, &found_consonants);
         local_consonants -= found_consonants;
       }
     }
-    printf("%ld\n", i);
+    // printf("Count from (%d, %d, %d) = %d %d \n", st->id, fdt_start, fdt, local_words, local_consonants);
   }
 
-  printf("Worker %d: %d %d\n", st->id, local_words, local_consonants);
+  // printf("Worker %d: %d %d\n", st->id, local_words, local_consonants);
 
-  return NULL;
+  // update shared words and consonants (mutual exclusion)
+  pthread_mutex_lock(&st->shm->mutex);
+  *st->shm->words += local_words;
+  *st->shm->consonants += local_consonants;
+  pthread_mutex_unlock(&st->shm->mutex);
+
+  return 0;
 }
 
 int main(int argc, char *argv[]) {
+  if (argc < 3) {
+    printf("Insuficient number of arguments!\n");
+    return 1;
+  }
+  files_c = argc - 2;
+  files = argv + 2;
+
+  printf("Reading %d files.\n", files_c);
+  for (int i = 0; i < files_c; i++) {
+    printf("File %d: %s\n", i, files[i]);
+  }
+
   int words = 0, consonants = 0;
   int err;
 
   // Threads variables
   int thread_c = atoi(argv[1]);
+  if (thread_c < 1) {
+    printf("Invalid number of threads, thread count should be >1\n");
+    return 2;
+  }
   pthread_t threads[thread_c];
   struct worker_st worker_args[thread_c];
   struct worker_shm workers_shm = {NULL, &words, &consonants, thread_c};
   pthread_mutex_init(&workers_shm.mutex, NULL);
 
-  for (int i = 2; i < argc; i++) {
-    printf("FILE: %s\n", argv[i]);
-
-    workers_shm.file_str = argv[i];
-
-    // start threads
-    for (int j = 0; j < thread_c; j++) {
-      worker_args[j].id = j;
-      worker_args[j].shm = &workers_shm;
-      pthread_create(&threads[j], NULL, worker, &worker_args[j]);
-    }
-
-    // wait for ending of threads
-    for (int j = 0; j < thread_c; j++) {
-      pthread_join(threads[j], NULL);
-    }
+  get_delta_time();
+  // start threads
+  for (int j = 0; j < thread_c; j++) {
+    worker_args[j].id = j;
+    worker_args[j].shm = &workers_shm;
+    pthread_create(&threads[j], NULL, worker, &worker_args[j]);
   }
 
-  printf("Total Number of words: %d\n", words);
+  // wait for ending of threads
+  for (int j = 0; j < thread_c; j++) {
+    pthread_join(threads[j], NULL);
+  }
+
+  printf("\nTotal Number of words: %d\n", words);
   printf("Total number of words with at least two instances or the same "
          "consonant: %d\n",
          consonants);
+  printf("Took %f seconds to run\n", get_delta_time());
 
   return 0;
 }

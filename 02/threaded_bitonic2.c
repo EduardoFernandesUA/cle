@@ -189,8 +189,8 @@ void bitonic_sort2(uint32_t *buf, uint32_t N, uint32_t thr_i, uint32_t thr_c) {
       // printf("%d(%d, %d) ", t, a, b);
     }
 
-    sync(thr_c);
-    // printf("\n");
+    // sync(thr_c);
+    //  printf("\n");
   }
 }
 
@@ -218,7 +218,7 @@ void *worker(void *args) {
   // }
   merge_sort_asc(st->worker_shm->buf, seq_i, seq_s);
 
-  sync(st->worker_shm->thr_c);
+  // sync(st->worker_shm->thr_c);
 
   // bitonic_sort2(st->worker_shm->buf, st->worker_shm->n / 2, st->id, st->worker_shm->thr_c);
   // bitonic_sort2(st->worker_shm->buf + st->worker_shm->n / 2, st->worker_shm->n / 2, st->id, st->worker_shm->thr_c);
