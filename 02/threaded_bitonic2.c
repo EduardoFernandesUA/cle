@@ -155,7 +155,6 @@ void bitonic_sort(uint32_t *buf, uint32_t size, uint32_t i, uint32_t thr_c) {
   }
 }
 void bitonic_sort2(uint32_t *buf, uint32_t N, uint32_t thr_i, uint32_t thr_c) {
-
   uint32_t i_size = (N / 2) / thr_c;
   uint32_t i_start = i_size * thr_i;
   uint32_t i_end = i_start + i_size;
@@ -169,7 +168,10 @@ void bitonic_sort2(uint32_t *buf, uint32_t N, uint32_t thr_i, uint32_t thr_c) {
   // this first pass is needed to merge ascending sequences
   for (uint32_t c = i_start; c < i_end; c++) {
     caps(&buf[c], &buf[N - c - 1]);
+    // printf("a%2d: %2d.%2d\n", thr_i, c, N - c - 1);
   }
+
+  // printf("\n");
 
   sync(thr_c);
 
@@ -177,20 +179,17 @@ void bitonic_sort2(uint32_t *buf, uint32_t N, uint32_t thr_i, uint32_t thr_c) {
     uint32_t nL = 1 << m;
     uint32_t v = N >> (m + 1);
     uint32_t vl1 = N >> m;
-    // printf("nL: %d  v: %d\n", nL, v);
 
-    // for (uint32_t c = 0; c < (N / 2); c++) {
     for (uint32_t c = i_start; c < i_end; c++) {
       uint32_t t = c % v;
       uint32_t u = (c * 2) / vl1 * vl1;
 
       caps(&buf[t + u], &buf[t + u + v]);
-
-      // printf("%d(%d, %d) ", t, a, b);
+      // printf("m: %d, %2d: %2d.%2d\n", m, thr_i, t + u, t + u + v);
     }
 
-    // sync(thr_c);
-    //  printf("\n");
+    sync(thr_c);
+    // printf("\n");
   }
 }
 
@@ -210,30 +209,15 @@ void *worker(void *args) {
   uint32_t seq_s = (st->worker_shm->n / st->worker_shm->thr_c);
   uint32_t seq_i = seq_s * st->id;
 
-  // merge sort portion of sequence
-  // if (st->id % 2 == 0) {
-  //   merge_sort_asc(st->worker_shm->buf, seq_i, seq_s);
-  // } else {
-  //   merge_sort_desc(st->worker_shm->buf, seq_i, seq_s);
-  // }
   merge_sort_asc(st->worker_shm->buf, seq_i, seq_s);
+  sync(st->worker_shm->thr_c);
 
-  // sync(st->worker_shm->thr_c);
-
-  // bitonic_sort2(st->worker_shm->buf, st->worker_shm->n / 2, st->id, st->worker_shm->thr_c);
-  // bitonic_sort2(st->worker_shm->buf + st->worker_shm->n / 2, st->worker_shm->n / 2, st->id, st->worker_shm->thr_c);
-  // bitonic_sort2(st->worker_shm->buf, st->worker_shm->n / 2, st->id, st->worker_shm->thr_c);
-  // bitonic_sort2(st->worker_shm->buf + st->worker_shm->n / 2, st->worker_shm->n / 2, st->id, st->worker_shm->thr_c);
   for (uint32_t i = st->worker_shm->thr_c >> 1; i > 0; i >>= 1) {
     for (int j = 0; j < i; j++) {
       bitonic_sort2(st->worker_shm->buf + (st->worker_shm->n / i) * j, st->worker_shm->n / i, st->id, st->worker_shm->thr_c);
     }
   }
 
-  // bitonic_sort2(st->worker_shm->buf, st->worker_shm->n / 2, st->id, st->worker_shm->thr_c);
-  // bitonic_sort2(st->worker_shm->buf + st->worker_shm->n / 2, st->worker_shm->n / 2, st->id, st->worker_shm->thr_c);
-  //
-  bitonic_sort2(st->worker_shm->buf, st->worker_shm->n, st->id, st->worker_shm->thr_c);
   return NULL;
 }
 
