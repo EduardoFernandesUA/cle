@@ -208,7 +208,7 @@ static int distributor(FILE **fd) {
   file_s = ftell(*fd);
   fseek(*fd, file_pos, SEEK_SET);
 
-  // printf("distributor %d\n", file_pos);
+  // printf("distributtor %d\n", file_pos);
 
   // prepare the variables for the next thread
   if (file_pos + BUFFER_SIZE > file_s) { // reached end of file
@@ -277,7 +277,7 @@ void *worker(void *args) {
 
 int main(int argc, char *argv[]) {
   if (argc < 3) {
-    printf("Insuficient number of arguments!\n");
+    printf("Insufficient number of arguments!\n");
     return 1;
   }
   files_c = argc - 2;
