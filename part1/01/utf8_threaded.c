@@ -75,7 +75,6 @@ int nextUTF8(FILE *fd, union UTF8 *utf) {
 }
 
 void removeAccentuation(union UTF8 *utf) {
-  uint8_t c = utf->bytes[3];
   switch (utf->code >> 16) {
   // á - à - â - ã
   case 0xC3A1:
@@ -189,7 +188,7 @@ int nextWord(FILE *fd, int *words, int *consonants) {
  * uses static variables to keep track of current file and position
  * returns !0 if no next block available (the thread should when, no more work to do)
  * */
-static int distributor(FILE **fd) {
+static int distributor(FILE **fd, int *file_index) {
   static pthread_mutex_t mut = PTHREAD_MUTEX_INITIALIZER;
   static int file_i = 0;   // between 0 and file count
   static int file_pos = 0; // multiple of BLOCK_SIZE
@@ -201,6 +200,8 @@ static int distributor(FILE **fd) {
     pthread_mutex_unlock(&mut);
     return 1; // all files read
   }
+
+  *file_index = file_i;
 
   // open file descriptor for current thread
   *fd = fopen(files[file_i], "rb");
@@ -232,13 +233,25 @@ void *worker(void *args) {
   FILE *fd;
   int err, n, local_words = 0, local_consonants = 0;
   int found_words = 0, found_consonants = 0;
-  int fdt = 0, fdt_start, old_consonants;
+  int fdt = 0, fdt_start;
+  int current_file = -1; 
 
   while (True) { // each loop handles a sub sequence
-    err = distributor(&fd);
+    int file_index;
+    err = distributor(&fd, &file_index); 
+    if (current_file != file_index) {
+      if (current_file != -1) {
+        printf("\nFile name: %s\n", files[current_file]);
+        printf("Number of words: %d\n", local_words);
+        printf("Number of words with at least two instances of the same consonant: %d\n", local_consonants);
+      }
+      current_file = file_index;
+      local_words = 0;
+      local_consonants = 0;
+    }
     fdt_start = ftell(fd);
     fdt = ftell(fd);
-    if (err) { // end of work, all done
+    if (err) { 
       break;
     }
 
@@ -261,10 +274,13 @@ void *worker(void *args) {
         local_consonants -= found_consonants;
       }
     }
-    // printf("Count from (%d, %d, %d) = %d %d \n", st->id, fdt_start, fdt, local_words, local_consonants);
   }
-
-  // printf("Worker %d: %d %d\n", st->id, local_words, local_consonants);
+  // Print last file
+  if (current_file != -1) {
+    printf("\nFile name: %s\n", files[current_file]);
+    printf("Number of words: %d\n", local_words);
+    printf("Number of words with at least two instances of the same consonant: %d\n", local_consonants);
+  }
 
   // update shared words and consonants (mutual exclusion)
   pthread_mutex_lock(&st->shm->mutex);
@@ -283,13 +299,12 @@ int main(int argc, char *argv[]) {
   files_c = argc - 2;
   files = argv + 2;
 
-  printf("Reading %d files.\n", files_c);
-  for (int i = 0; i < files_c; i++) {
-    printf("File %d: %s\n", i, files[i]);
-  }
+  //printf("Reading %d files.\n", files_c);
+  // for (int i = 0; i < files_c; i++) {
+  //   printf("File %d: %s\n", i, files[i]);
+  // }
 
   int words = 0, consonants = 0;
-  int err;
 
   // Threads variables
   int thread_c = atoi(argv[1]);
@@ -315,11 +330,7 @@ int main(int argc, char *argv[]) {
     pthread_join(threads[j], NULL);
   }
 
-  printf("\nTotal Number of words: %d\n", words);
-  printf("Total number of words with at least two instances or the same "
-         "consonant: %d\n",
-         consonants);
-  printf("Took %f seconds to run\n", get_delta_time());
+  printf("\nTook %f seconds to run\n", get_delta_time());
 
   return 0;
 }
