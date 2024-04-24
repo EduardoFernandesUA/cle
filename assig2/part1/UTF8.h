@@ -69,9 +69,12 @@ int nextUTF8(uint8_t* buf, union UTF8* utf) {
     n = 4;
   }
 
-  for (int i = 3; i > 3 - n; i--) {
-    utf->bytes[i] = buf[i];
-    /* printf("%c", utf->bytes[i]); */
+  /* printf("%c", buf[0]); */
+
+  /* printf("\n"); */
+  for (int i = 0; i < n; i++) {
+    utf->bytes[3 - i] = buf[i];
+    /* printf("%c", buf[i]); */
   }
 
   return n;
@@ -231,7 +234,6 @@ int countBuffer(uint8_t* buf, int* words, int* consonants) {
     i += nextUTF8(&buf[i], &utf);
     removeAccentuation(&utf);
     printUTF8(&utf);
-    /* printf("%c", utf.bytes[3]); */
 
     uint8_t c = utf.bytes[3];
     if (c >= 'a' && c <= 'z' && c != 'a' && c != 'e' && c != 'i' && c != 'o' && c != 'u') {
@@ -240,6 +242,14 @@ int countBuffer(uint8_t* buf, int* words, int* consonants) {
       }
     }
     inWord = isWordLetter(&utf) || inWord;
+
+    if (isMergerLetter(&utf)) {
+      *consonants += inConsonant;
+      inConsonant = 0;
+      for (int i = 0; i < 26; i++) {
+        letter[i] = 0;
+      }
+    }
 
     if (!isWordLetter(&utf) && !isMergerLetter(&utf)) {
       *words += inWord;
