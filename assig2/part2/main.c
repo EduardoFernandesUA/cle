@@ -12,17 +12,30 @@ mpiexec -n 8 ./out -d 1 dataset2/datSeq16M.bin
 #include "readFile.h"
 #include "bitonicSort.h"
 
+/**
+ * @brief A structure to hold a sequence's direction and size.
+ */
 struct Seq {
   int direction; // 0 for ascending order, 1 for descending order
   int size; // size of the sequence
 };
 
+/**
+ * @brief Prints the help message for the command.
+ *
+ * @param cmdName The name of the command.
+ */
 static void help (char *cmdName) {
   fprintf (stderr, "OPTIONS:\n"
             "  -d      --- direction (0 for ascending || 1 for descending) \n"
             "  -h      --- print this help\n");
 }
 
+/**
+ * @brief Calculates the time difference between two consecutive calls to this function.
+ *
+ * @return The time difference in seconds.
+ */
 static double get_delta_time(void) {
   static struct timespec t0, t1;
 
@@ -35,6 +48,14 @@ static double get_delta_time(void) {
   return (double) (t1.tv_sec - t0.tv_sec) + 1.0e-9 * (double) (t1.tv_nsec - t0.tv_nsec) ;
 }
 
+/**
+ * @brief Verifies if a sequence of integers is sorted in a given direction.
+ *
+ * @param sequence The sequence of integers to verify.
+ * @param size The number of elements in the sequence.
+ * @param direction The expected direction of the sequence, 0 for ascending and 1 for descending.
+ * @return 1 if the sequence is sorted in the given direction, 0 otherwise.
+ */
 int verifySequenceCorrectness(const int *sequence, int size, int direction) {
   for (int i = 0; i < size - 1; i++) {
     if ((direction == 0 && sequence[i] > sequence[i + 1]) || 
