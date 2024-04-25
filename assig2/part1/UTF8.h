@@ -91,7 +91,6 @@ int prevUTF8(FILE* fd, union UTF8* utf) {
 }
 
 void removeAccentuation(union UTF8* utf) {
-  uint8_t c = utf->bytes[3];
   switch (utf->code >> 16) {
     // á - à - â - ã
     case 0xC3A1:
@@ -205,27 +204,32 @@ int endOfPreviusWord(FILE* fd) {
   utf.code = 0;
 
   uint8_t c;
-  int offset;
+  int offset = 0;
+  int notUTF = 0;
   do {
+    notUTF = 0;
     fseek(fd, initial - offset, SEEK_SET);
     fread(&c, 1, 1, fd);
-    if ((c & 0x11000000) == 0x10000000) {
+    fseek(fd, initial - offset, SEEK_SET);
+    if ((c & 0b11000000) == 0b10000000) {
       offset++;
+      notUTF = 1;
       continue;
     }
     nextFileUTF8(fd, &utf);
+    /* printUTF8(&utf); */
     removeAccentuation(&utf);
     offset++;
     if (offset > initial)
       break;
-  } while (isWordLetter(&utf) || isMergerLetter(&utf));
+  } while (isWordLetter(&utf) || isMergerLetter(&utf) || notUTF);
 
   return 0;
 }
 
 int countBuffer(uint8_t* buf, int* words, int* consonants) {
   union UTF8 utf;
-  uint8_t letter[26];
+  uint8_t letter[26] = {0};
   int inWord = 0, inConsonant = 0;
 
   // for each utf
@@ -233,7 +237,7 @@ int countBuffer(uint8_t* buf, int* words, int* consonants) {
   while (buf[i] != '\0') {
     i += nextUTF8(&buf[i], &utf);
     removeAccentuation(&utf);
-    printUTF8(&utf);
+    /* printUTF8(&utf); */
 
     uint8_t c = utf.bytes[3];
     if (c >= 'a' && c <= 'z' && c != 'a' && c != 'e' && c != 'i' && c != 'o' && c != 'u') {
@@ -242,14 +246,6 @@ int countBuffer(uint8_t* buf, int* words, int* consonants) {
       }
     }
     inWord = isWordLetter(&utf) || inWord;
-
-    if (isMergerLetter(&utf)) {
-      *consonants += inConsonant;
-      inConsonant = 0;
-      for (int i = 0; i < 26; i++) {
-        letter[i] = 0;
-      }
-    }
 
     if (!isWordLetter(&utf) && !isMergerLetter(&utf)) {
       *words += inWord;
@@ -261,6 +257,9 @@ int countBuffer(uint8_t* buf, int* words, int* consonants) {
       }
     }
   }
+
+  *words += inWord;
+  *consonants += inConsonant;
 
   return 0;
 }
