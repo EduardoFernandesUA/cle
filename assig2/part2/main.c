@@ -66,20 +66,61 @@ int verifySequenceCorrectness(const int *sequence, int size, int direction) {
   return 1;
 }
 
+/**
+ * @brief Processes the command line arguments.
+ *
+ * @param argc The number of arguments.
+ * @param argv The arguments.
+ * @param direction The sorting direction.
+ * @param fileName The name of the file to read the sequence from.
+ */
+void process_command_line(int argc, char *argv[], int *direction, char **fileName) {
+  int opt;
+  *direction = 0;
+
+  do { 
+    switch ((opt = getopt (argc, argv, "d:h"))) {
+      case 'd':
+        if (atoi(optarg) != 0 && atoi(optarg) != 1) {
+          fprintf(stderr, "%s: invalid sort direction\n", basename(argv[0]));
+          help(basename(argv[0]));
+          exit(EXIT_FAILURE);
+        }
+        *direction = (int) atoi (optarg);
+        break;
+
+      case 'h':
+        help (basename (argv[0]));
+        exit(EXIT_SUCCESS);
+
+      case '?': 
+        fprintf (stderr, "%s: invalid option\n", basename (argv[0]));
+        help (basename (argv[0]));
+        exit(EXIT_FAILURE);
+
+      case -1:  break;
+    }
+  } while (opt != -1);
+
+  if (argc < 4){ 
+    fprintf (stderr, "Invalid format!\n");
+    help (basename (argv[0]));
+    exit(EXIT_FAILURE);
+  }
+
+  *fileName = argv[optind];
+}
 
 int main(int argc, char *argv[]) {
-  MPI_Init (&argc, &argv);
-  int rank, numProc, currentProc;
-
+  MPI_Init (NULL, NULL);
+  int rank, numProc;
   MPI_Comm_rank (MPI_COMM_WORLD, &rank); 
   MPI_Comm_size (MPI_COMM_WORLD, &numProc);
 
   struct Seq seq;
+  MPI_Group currentGroup, nextGroup;
+  MPI_Comm currentComm, nextComm;
   int *sequence = NULL;
-  MPI_Group nowGroup, nextGroup;
-  MPI_Comm nowComm, nextComm;
-
-  int Group[8]; // 8 max number of processes
 
   if ((numProc & (numProc - 1)) != 0) {
     if (rank == 0) {
@@ -90,41 +131,9 @@ int main(int argc, char *argv[]) {
   }
 
   if (rank == 0){
-    int opt;
     char* fileName;
-    int direction = 0;
-
-    do { 
-      switch ((opt = getopt (argc, argv, "d:h"))) {
-        case 'd':
-          if (atoi(optarg) != 0 && atoi(optarg) != 1) {
-            fprintf(stderr, "%s: invalid sort direction\n", basename(argv[0]));
-            help(basename(argv[0]));
-            exit(EXIT_FAILURE);
-          }
-          direction = (int) atoi (optarg);
-          break;
-
-        case 'h':
-          help (basename (argv[0]));
-          return EXIT_SUCCESS;
-
-        case '?': 
-          fprintf (stderr, "%s: invalid option\n", basename (argv[0]));
-          help (basename (argv[0]));
-          return EXIT_FAILURE;
-
-        case -1:  break;
-      }
-    } while (opt != -1);
-
-    if (argc < 4){ 
-      fprintf (stderr, "Invalid format!\n");
-      help (basename (argv[0]));
-      return EXIT_FAILURE;
-    }
-
-    fileName = argv[optind];
+    int direction;
+    process_command_line(argc, argv, &direction, &fileName);
 
     printf ("File: %s\n", fileName);
     printf ("%s Sorting...\n", direction == 0 ? "Ascending" : "Descending" );
@@ -144,15 +153,15 @@ int main(int argc, char *argv[]) {
   int *buf = (int *) malloc(seq.size * sizeof(int));
 
   int numIterations = (int) log2(numProc);
-
+  
   int subsequenceSize = 0;
 
-  // Create Communication Groups for the processes
-  nowComm = MPI_COMM_WORLD;
-  MPI_Comm_group (nowComm, &nowGroup);
+  int Group[8]; // 8 max number of processes
+  int currentProc = numProc;
 
-  // Number of current processes
-  currentProc = numProc;
+  // Create Communication Groups for the processes
+  currentComm = MPI_COMM_WORLD;
+  MPI_Comm_group (currentComm, &currentGroup);
 
   // Create the group of processes
   for (int i = 0; i < numProc; i++) {
@@ -165,13 +174,12 @@ int main(int argc, char *argv[]) {
 
   for (int i = 0; i <= numIterations; i++) {
     if (i != 0) {
-      MPI_Group_incl(nowGroup, currentProc, Group, &nextGroup); // 
-      MPI_Comm_create(nowComm, nextGroup, &nextComm);
+      MPI_Group_incl(currentGroup, currentProc, Group, &nextGroup); 
+      MPI_Comm_create(currentComm, nextGroup, &nextComm);
 
-      nowComm = nextComm;
-      nowGroup = nextGroup;
+      currentComm = nextComm;
+      currentGroup = nextGroup;
 
-      // If the rank is greater than the current number of processes, then the process is not needed
       if (rank >= currentProc) {
         free(buf);
         MPI_Finalize();
@@ -179,10 +187,11 @@ int main(int argc, char *argv[]) {
       }
     }
 
-    MPI_Comm_size (nowComm, &numProc);
+    MPI_Comm_size (currentComm, &numProc);
     subsequenceSize = seq.size / currentProc;
 
-    MPI_Scatter(sequence, subsequenceSize, MPI_INT, buf, subsequenceSize, MPI_INT, 0, nowComm);
+    // Distribute the sequence through the processes
+    MPI_Scatter(sequence, subsequenceSize, MPI_INT, buf, subsequenceSize, MPI_INT, 0, currentComm);
 
     // Sort subsequence
     if (i == 0) {
@@ -193,7 +202,10 @@ int main(int argc, char *argv[]) {
       bitonicMerge(buf, subsequenceSize, seq.direction);
     }
 
-    MPI_Gather(buf, subsequenceSize, MPI_INT, sequence, subsequenceSize, MPI_INT, 0, nowComm);
+    // Wait for all processes to finish sorting
+    MPI_Barrier(currentComm); 
+
+    MPI_Gather(buf, subsequenceSize, MPI_INT, sequence, subsequenceSize, MPI_INT, 0, currentComm);
     currentProc = numProc / 2;
   }
 
@@ -209,6 +221,8 @@ int main(int argc, char *argv[]) {
 
   free(buf);
   free(sequence);
+  
   MPI_Finalize();
+
   return EXIT_SUCCESS;
 }

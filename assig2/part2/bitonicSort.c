@@ -1,6 +1,22 @@
 #include "bitonicSort.h"
 
-#define swap(a, b) { int t = *a; *a = *b; *b = t; }
+/**
+ * @brief Swaps two integers.
+ */
+void swap(int *a, int *b) {
+  int t = *a;
+  *a = *b;
+  *b = t;
+}
+
+/**
+ * @brief Compares and swaps two elements in a sequence based on the sorting direction.
+ */
+void compareAndSwap(int sequence[], int i, int j, int direction) {
+  if ((direction == 0 && sequence[i] > sequence[j]) || (direction == 1 && sequence[i] < sequence[j])) {
+    swap(&sequence[i], &sequence[j]);
+  }
+}
 
 /**
  * @brief Sorts a sequence of integers using the Bitonic sort algorithm.
@@ -10,19 +26,12 @@
  * @param direction The sorting direction, 1 for ascending and 0 for descending.
  */
 void bitonicSort(int sequence[], int n, int direction) {
-  int i, j, k;
-  for (k = 2; k <= n; k = 2 * k) {
-    for (j = k/2; j > 0; j = j/2) {
-      for (i = 0; i < n; i++) {
+  for (int k = 2; k <= n; k *= 2) {
+    for (int j = k / 2; j > 0; j /= 2) {
+      for (int i = 0; i < n; i++) {
         int x = i ^ j;
-
-        if ((x) > i) {
-          if ((i & k) == 0 && ((direction == 0 && sequence[i] > sequence[x]) || (direction == 1 && sequence[i] < sequence[x]))) {
-            swap(&sequence[i], &sequence[x]);
-          }
-          if ((i & k) != 0 && ((direction == 0 && sequence[i] < sequence[x]) || (direction == 1 && sequence[i] > sequence[x]))) {
-            swap(&sequence[i], &sequence[x]);
-          }
+        if (x > i) {
+          compareAndSwap(sequence, i, x, (i & k) == 0 ? direction : 1 - direction);
         }
       }
     }
@@ -37,19 +46,12 @@ void bitonicSort(int sequence[], int n, int direction) {
  * @param direction The merging direction, 1 for ascending and 0 for descending.
  */
 void bitonicMerge(int sequence[], int n, int direction) {
-  int i, j, k;
-  for (k = n/2; k <= n; k = 2 * k) {
-    for (j = k/2; j > 0; j = j/2) {
-      for (i = 0; i < n; i++) {
+  for (int k = n / 2; k <= n; k *= 2) {
+    for (int j = k / 2; j > 0; j /= 2) {
+      for (int i = 0; i < n; i++) {
         int x = i ^ j;
-
-        if ((x) > i) {
-          if ((i & k) == 0 && ((direction == 0 && sequence[i] > sequence[x]) || (direction == 1 && sequence[i] < sequence[x]))) {
-            swap(&sequence[i], &sequence[x]);
-          }
-          if ((i & k) != 0 && ((direction == 0 && sequence[i] < sequence[x]) || (direction == 1 && sequence[i] > sequence[x]))) {
-            swap(&sequence[i], &sequence[x]);
-          }
+        if (x > i) {
+          compareAndSwap(sequence, i, x, (i & k) == 0 ? direction : 1 - direction);
         }
       }
     }

@@ -2,6 +2,16 @@
 #define BITONICSORT_H
 
 /**
+ * @brief Swaps two integers.
+ */
+extern void swap(int *a, int *b);
+
+/**
+ * @brief Compares and swaps two elements in a sequence based on the sorting direction.
+ */
+extern void compareAndSwap(int sequence[], int i, int j, int direction);
+
+/**
  * @brief Sorts a sequence of integers using the Bitonic sort algorithm.
  *
  * @param sequence The array of integers to be sorted.
