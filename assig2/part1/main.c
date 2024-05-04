@@ -16,7 +16,7 @@
 
 struct Node {
   int file;
-  uint8_t block[BLOCK_SIZE];
+  uint8_t block[BLOCK_SIZE + 1];
   int startPos;
   int endPos;
   struct Node* next;
