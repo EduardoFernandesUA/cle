@@ -12,10 +12,13 @@
 #include "common.h"
 #include <cuda_runtime.h>
 
+#define FILE_SIZE 1 << 20;
+#define ROW_SIZE 512 // sqrt(FILE_SIZE) / 2
+
 /* allusion to internal functions */
 
 static void sort_cpu_kernel(unsigned int *matrix, unsigned int matrix_size);
-__global__ static void sort_cuda_kernel(unsigned int *__restrict__ matrix, unsigned int matrix_size, unsigned int k, unsigned int j);
+__global__ static void sort_cuda_kernel(unsigned int *__restrict__ matrix_helper, unsigned int *__restrict__ matrix, unsigned int matrix_size, unsigned int k, unsigned int j);
 static double get_delta_time(void);
 
 /**
@@ -74,7 +77,7 @@ int main(int argc, char **argv) {
 
   size_t matrix_size = n * sizeof(unsigned int);
   unsigned int *host_sorted, *host_device_sorted;
-  unsigned int *device_matrix;
+  unsigned int *device_matrix, *device_matrix_helper;
 
   if (matrix_size > (size_t)5e9) {
     fprintf(stderr, "The GeForce GTX 1660 Ti cannot handle more than 5GB of memory!\n");
@@ -84,6 +87,7 @@ int main(int argc, char **argv) {
   host_sorted = (unsigned int *)malloc(matrix_size);
   host_device_sorted = (unsigned int *)malloc(matrix_size);
   CHECK(cudaMalloc((void **)&device_matrix, matrix_size));
+  CHECK(cudaMalloc((void **)&device_matrix_helper, matrix_size));
 
   unsigned int gridDimX, gridDimY, gridDimZ, blockDimX, blockDimY, blockDimZ;
   // for (int i = 0; i < 0; i++) {
@@ -98,21 +102,22 @@ int main(int argc, char **argv) {
 
   /* run the computational kernel (gpu) */
 
-  blockDimX = 32; // optimize!
-  blockDimY = 32; // optimize!
-  blockDimZ = 1;  // do not change!
-  gridDimX = 16;  // optimize!
-  gridDimY = 32;  // optimize!
-  gridDimZ = 1;   // do not change!
-
   /*
- blockDimX = 4; // optimize!
- blockDimY = 4;     // optimize!
- blockDimZ = 1;     // do not change!
- gridDimX = 1;      // optimize!
- gridDimY = 1;      // optimize!
- gridDimZ = 1;      // do not change!
- */
+  uint i = 6;
+  blockDimX = 1 << 9; // optimize!
+  blockDimY = 1;      // optimize!
+  blockDimZ = 1;      // do not change!
+  gridDimX = 1 << 10; // optimize!
+  gridDimY = 1;       // optimize!
+  gridDimZ = 1;       // do not change!
+  */
+
+  blockDimX = 8;  // optimize!
+  blockDimY = 16; // optimize!
+  blockDimZ = 1;  // do not change!
+  gridDimX = 1;   // optimize!
+  gridDimY = 1;   // optimize!
+  gridDimZ = 1;   // do not change!
 
   dim3 grid(gridDimX, gridDimY, gridDimZ);
   dim3 block(blockDimX, blockDimY, blockDimZ);
@@ -123,23 +128,37 @@ int main(int argc, char **argv) {
   }
   uint k, kk, j;
   (void)get_delta_time();
+  /*
   for (k = 2, kk = 1; k <= n; k *= 2, kk++) { // for each iteration
     for (j = k / 2; j >= 1; j /= 2) {         // for each step
       sort_cuda_kernel<<<grid, block>>>(device_matrix, matrix_size, k, j);
       CHECK(cudaDeviceSynchronize()); // wait for kernel to finish
+      return 0;
     }
+  }
+  */
+  for (int iter = 0; iter < 8; iter++) {
+    for (k = (1 << iter); k >= 1; k >>= 1) { // for each iteration
+      printf("ITER: %d  k: %d\n", iter, k);
+      sort_cuda_kernel<<<grid, block>>>(device_matrix_helper, device_matrix, matrix_size, iter, k);
+      CHECK(cudaDeviceSynchronize()); // wait for kernel to finish
+      unsigned int *temp = device_matrix_helper;
+      device_matrix_helper = device_matrix;
+      device_matrix = temp;
+    }
+    break;
   }
   CHECK(cudaGetLastError()); // check for kernel errors
   /*avg += get_delta_time();
 }
 */
-  printf("\nThe CUDA kernel <<<(%d,%d,%d), (%d,%d,%d)>>> took %.3e seconds to run\n",
+  printf("\nThe CUDA kernel <<<(%d,%d,%d), (%d,%d,%d)>>> took %.3f seconds to run\n",
          gridDimX, gridDimY, gridDimZ, blockDimX, blockDimY, blockDimZ, get_delta_time());
 
   /* copy kernel result back to host side */
   (void)get_delta_time();
   CHECK(cudaMemcpy(host_device_sorted, device_matrix, matrix_size, cudaMemcpyDeviceToHost));
-  printf("The transfer of %ld bytes from the device to the host took %.3e seconds\n", (long)matrix_size, get_delta_time());
+  printf("The transfer of %ld bytes from the device to the host took %.3f seconds\n", (long)matrix_size, get_delta_time());
 
   /* free device global memory */
 
@@ -160,11 +179,10 @@ int main(int argc, char **argv) {
 
   // printf("SORTED?\n");
   for (int i = 0; i < n - 1; i++) {
-    // printf("%2d: %d\n", i, host_device_sorted[i]);
+    printf("%2d: %d\n", i, host_device_sorted[i]);
     if (host_device_sorted[i + 1] < host_device_sorted[i]) {
       // printf("!");
-      printf("ERROR: CPU NOT SORTED\n");
-      return 8;
+      // printf("ERROR: CPU NOT SORTED\n");
     }
   }
 
@@ -210,27 +228,54 @@ static void sort_cpu_kernel(unsigned int *arr, unsigned int n) {
  * k -> current iteration
  * j -> current step
  **/
-__global__ static void sort_cuda_kernel(unsigned int *__restrict__ arr, unsigned int n, unsigned int k, unsigned int j) {
-  int row = blockIdx.y * blockDim.y + threadIdx.y;
-  int col = blockIdx.x * blockDim.x + threadIdx.x;
-  int idx = row * 512 + col;
+__global__ static void sort_cuda_kernel(unsigned int *__restrict__ arrDst, unsigned int *__restrict__ arr, unsigned int n, unsigned int iter, unsigned int k) {
+  unsigned int x = threadIdx.x + blockDim.x * blockIdx.x;
+  unsigned int y = threadIdx.y + blockDim.y * blockIdx.y;
+  unsigned int idx = gridDim.x * blockDim.x * y + x;
 
+  unsigned int subi = (n / k) * (1 << iter) * idx + idx;
+
+  unsigned int idx2 = idx - (idx % (k << 1)) + (idx + k) % (k << 1);
+  int sort = ((idx / (1 << iter)) & 0x1) == 0x1;
+
+  if ((sort && arr[idx] > arr[idx2]) || (!sort && arr[idx] < arr[idx2])) {
+    arrDst[idx] = arr[idx2];
+  } else {
+    arrDst[idx] = arr[idx];
+  }
+
+  /*
   uint i, l, temp;
 
   // printf("\t%2d: ITER %d STEP %d\n", idx, k, j);
 
   // for (i = 0; i < n; i += j << 1) { // for each block
-  i = idx / (j) * (j << 1);    // currespondent block
-  uint sort = ((i / k)) & 0x1; // 0 for ascending block and 1 for descending
-                               // printf("\t\tblock start: %d %s\n", i, sort ? "<" : ">");
+  i = (idx / j) * (j << 1);  // currespondent block
+  uint sort = (i / k) & 0x1; // 0 for ascending block and 1 for descending
+                             // printf("\t\tblock start: %d %s\n", i, sort ? "<" : ">");
   l = i + idx % j;
   //  for (l = i; l < i + j; l++) {
   // printf("\t\t%2d: %d(%d, %d)\n", idx, j, l, l + j);
+  if (!sort) {
+    if (arr[l] > arr[l + j]) {
+      temp = arr[l];
+      arr[l] = arr[l + j];
+      arr[l + j] = temp;
+    }
+  } else {
+    if (arr[l] < arr[l + j]) {
+      temp = arr[l];
+      arr[l] = arr[l + j];
+      arr[l + j] = temp;
+    }
+  }
+  /*
   if ((!sort && arr[l] > arr[l + j]) || (sort && arr[l] < arr[l + j])) {
     temp = arr[l];
     arr[l] = arr[l + j];
     arr[l + j] = temp;
   }
+  */
   //}
   //}
   // printf("(%d %d %d)\n", row, col, idx);

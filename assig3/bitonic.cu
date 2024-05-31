@@ -289,6 +289,7 @@ int main(int argc, char *argv[]) {
     nsteps++;
   }
   printf("Log Amount = %d\n", nsteps);
+  printf("<<<%d, %d>>>\n", numBlocks, blockSize);
   for (uint32_t step = 0; step < nsteps; step++) {
     dev_bitonicsort1<<<numBlocks, blockSize>>>(d_n, arrayLen, step, j);
     cudaDeviceSynchronize();
